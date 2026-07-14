@@ -1,16 +1,27 @@
-# fyp_gateway/client_agent/backend_core/local_api.py
 import os
 import sys
-import platform
+import ctypes
+import logging
+from typing import Optional
+from pydantic import BaseModel
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from hybrid_client_kdf import PQCHybridKDF
-from packet_sniffer import PQTunnelDataPlaneAgent
+# Logging setup for easy debugging in terminal
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
 
-app = FastAPI(title="PQ Tunnel Local Verification Core")
+app = FastAPI(
+    title="PQ Tunneling Client Core Local API",
+    description="Local microservice driving the Electron GUI and managing the post-quantum secure tunnel client-side.",
+    version="1.0.0"
+)
 
+# Enable CORS so Electron (running on custom protocols/localhost) can safely make requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,52 +30,104 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-data_plane_agent = PQTunnelDataPlaneAgent()
+# ==========================================
+# PRIVILEGE DETECTION UTILITY
+# ==========================================
 
-def evaluate_system_privileges():
-    if platform.system() == "Windows":
-        try:
-            import ctypes
+def is_running_as_elevated() -> bool:
+    """
+    Checks if the backend API has root/administrator privileges.
+    Required for virtual network interface (TUN/TAP) initialization.
+    """
+    try:
+        if os.name == 'nt':
+            # Windows Administrator Check
             return ctypes.windll.shell32.IsUserAnAdmin() != 0
-        except Exception: return False
-    else:
-        try: return os.getuid() == 0
-        except Exception: return False
+        else:
+            # Linux/macOS Root Check (UID 0 is root)
+            return os.getuid() == 0
+    except Exception as e:
+        logging.error(f"Error checking execution privileges: {e}")
+        return False
 
-@app.get("/v1/client/privileges")
-def get_privilege_matrix():
-    has_rights = evaluate_system_privileges()
+# ==========================================
+# REQUEST/RESPONSE MODELS
+# ==========================================
+
+class HandshakePayload(BaseModel):
+    gateway_ip: str
+    gateway_port: int
+    force_tunnel: Optional[bool] = False
+
+# ==========================================
+# API ENDPOINTS
+# ==========================================
+
+@app.get("/")
+def read_root():
+    """Service health and identity endpoint."""
     return {
-        "is_privileged": has_rights,
-        "diagnostic_msg": "System Elevated Context Confirmed." if has_rights else "Privilege Escalation Required! Run app as Administrator/Root."
+        "service": "PQ Tunneling Local Engine Core",
+        "status": "online",
+        "privilege_elevation_active": is_running_as_elevated()
     }
 
-@app.post("/v1/tunnel/connect")
-def trigger_full_connection_pipeline():
-    if not evaluate_system_privileges():
-        return {"status": "FAILED", "error": "Missing elevated administrative capabilities."}
-        
-    # Trigger Step 4 & 5 sequence logic simulation
-    client_seed = PQCHybridKDF.generate_ephemeral_lattice_parameters()
-    mock_aws_ciphertext = "8f3a9d2c1b4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a"
+
+@app.get("/api/v1/system/privilege-check")
+async def get_privilege_status():
+    """
+    Polled by Electron frontend during bootup to ensure the agent 
+    has enough privileges to spin up virtual network cards.
+    """
+    has_root = is_running_as_elevated()
+    os_type = "Windows (NT)" if os.name == "nt" else "Unix/Linux"
     
-    session_key = PQCHybridKDF.derive_quantum_safe_key(client_seed, mock_aws_ciphertext)
-    data_plane_agent.set_session_key(session_key)
-    data_plane_agent.start_tunnel_loop()
+    logging.info(f"Privilege check invoked. Result: Elevated={has_root} (OS: {os_type})")
     
     return {
-        "status": "CONNECTED",
-        "interface": "pqtun0",
-        "virtual_ip": "10.8.0.5",
-        "session_id": "pqc-session-active-7fff",
-        "latency": "18ms",
-        "encryption": "Secured (ML-KEM-1024 Hybrid Matrix)"
+        "status": "success",
+        "has_root_privileges": has_root,
+        "os_type": os_type,
+        "message": "Elevated context granted. TUN operations allowed." if has_root 
+                   else "Access Denied. Virtual Interface deployment requires root/administrator privileges."
     }
 
-@app.post("/v1/tunnel/disconnect")
-def deactivate_tunnel_pipeline():
-    data_plane_agent.stop_tunnel_loop()
-    return {"status": "DISCONNECTED", "message": "Tunnel link severed gracefully."}
+
+@app.post("/api/v1/tunnel/initiate")
+async def initiate_tunnel(payload: HandshakePayload):
+    """
+    Simulates checking context before triggering key exchange.
+    Will refuse to proceed if root elevation is missing.
+    """
+    # Enforce root barrier at endpoint level
+    if not is_running_as_elevated():
+        logging.warning("Blocked attempt to initiate tunnel without root/admin privileges.")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: Cannot provision virtual network adapter. Please launch local API with sudo/administrator permissions."
+        )
+    
+    logging.info(f"Spinning up PQC handshake with Gateway {payload.gateway_ip}:{payload.gateway_port}...")
+    
+    # Mocking successful session setup (ML-KEM metrics mapping)
+    return {
+        "status": "tunnel_negotiation_started",
+        "target_ip": "10.8.0.5",
+        "encryption_matrix": "Secured (Kyber-1024 Hybrid Matrix)",
+        "message": "Tunnel initialization sequence validated and triggered."
+    }
+
+# ==========================================
+# ENGINE RUNNER
+# ==========================================
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8001)
+    # Log current privileges status on boot
+    elevated = is_running_as_elevated()
+    if elevated:
+        logging.info("[+] SUCCESS: API running with elevated (Root/Admin) privileges. Ready to control network layers!")
+    else:
+        logging.warning("[-] WARNING: Running as non-root user. Network adapter operations will be locked.")
+        
+    logging.info("Starting local backend server on http://127.0.0.1:8001")
+    uvicorn.run(app, host="127.0.0.1", port=8001, log_level="info")
