@@ -1,23 +1,27 @@
-// client_agent/preload.js
-const { contextBridge } = require('electron');
+// fyp_gateway/client_agent/preload.js
+const { contextBridge, ipcRenderer } = require('electron');
 
-// Expose secure utility endpoints to frontend execution context safely
 contextBridge.exposeInMainWorld('electronAPI', {
-    triggerLocalTunnel: async () => {
-        try {
-            const response = await fetch('http://127.0.0.1:8001/v1/client/connect', { method: 'POST' });
-            return await response.json();
-        } catch (error) {
-            return { status: "ERROR", message: error.message };
-        }
-    },
-    checkLocalStatus: async () => {
-        try {
-            const response = await fetch('http://127.0.0.1:8001/v1/client/status');
-            return await response.json();
-        } catch (error) {
-            return { agent_status: "OFFLINE", error: error.message };
-        }
-    }
-});
+  sendMinimize: () => ipcRenderer.send('window-minimize'),
+  sendMaximize: () => ipcRenderer.send('window-maximize'),
+  sendClose: () => ipcRenderer.send('window-close'),
 
+  checkPrivileges: async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:8001/v1/client/privileges');
+      return await response.json();
+    } catch (err) {
+      return { is_privileged: false, diagnostic_msg: "Local Core Unreachable." };
+    }
+  },
+
+  connectTunnel: async () => {
+    const response = await fetch('http://127.0.0.1:8001/v1/tunnel/connect', { method: 'POST' });
+    return await response.json();
+  },
+
+  disconnectTunnel: async () => {
+    const response = await fetch('http://127.0.0.1:8001/v1/tunnel/disconnect', { method: 'POST' });
+    return await response.json();
+  }
+});

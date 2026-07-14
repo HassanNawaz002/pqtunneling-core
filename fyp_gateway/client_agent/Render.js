@@ -40,7 +40,45 @@ let state = {
   filter: 'all',
   search: '',
   selected: 'fastest',
+  hasRootPrivileges: false // Tracks system-level elevation status dynamically
 };
+
+// =====================================================================
+// INTEGRATION UTILITIES (FastAPI Core Operations Bridge)
+// =====================================================================
+const BACKEND_URL = 'http://127.0.0.1:8001';
+
+/**
+ * Interrogates the local core API to check if it has administrative access.
+ */
+async function runStartupPrivilegeValidation() {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/v1/system/privilege-check`);
+    if (!response.ok) throw new Error("Failed to contact the backend service.");
+    
+    const data = await response.json();
+    state.hasRootPrivileges = data.has_root_privileges;
+
+    console.log(`[PQC Monitor] System privilege validated. Elevated Status: ${state.hasRootPrivileges}`);
+    
+    if (!state.hasRootPrivileges) {
+      // Soft warnings visually displayed on UI
+      statusLabel.textContent = "SUDO / ADMIN REQUIRED";
+      statusCaption.textContent = "Virtual network interface requires elevated rights to initialize.";
+      statusCaption.style.color = "#ff4a4a";
+    } else {
+      // Restore default labels if running with complete elevation
+      statusLabel.textContent = "UNPROTECTED";
+      statusCaption.textContent = "Traffic is not passing through the PQ tunnel";
+      statusCaption.style.color = "";
+    }
+  } catch (err) {
+    console.error("[PQC Core Bridge Error] Unable to check privileges:", err);
+    statusLabel.textContent = "BACKEND DISCONNECTED";
+    statusCaption.textContent = "Ensure 'python local_api.py' is running on port 8001.";
+    statusCaption.style.color = "#ffdd57";
+  }
+}
 
 // =====================================================================
 // COUNTRY LIST
@@ -253,7 +291,7 @@ window.addEventListener('resize', () => {
 });
 
 // =====================================================================
-// CONNECT / DISCONNECT FLOW
+// CONNECT / DISCONNECT FLOW (With API Integration)
 // =====================================================================
 const connectBtn = document.getElementById('connectBtn');
 const connectBtnLabel = document.getElementById('connectBtnLabel');
@@ -264,10 +302,11 @@ const metaVirtualIp = document.getElementById('metaVirtualIp');
 const metaEncryption = document.getElementById('metaEncryption');
 const metaLatency = document.getElementById('metaLatency');
 
-function setConnectionUI(mode) {
+function setConnectionUI(mode, assignedIp = '10.8.0.5', encryptionMatrix = 'Secured (Kyber Hybrid Matrix)') {
   state.connection = mode;
   connectBtn.classList.remove('connected', 'connecting');
   statusShelf.classList.remove('protected');
+  statusCaption.style.color = "";
 
   if (mode === 'disconnected') {
     connectBtnLabel.textContent = 'Connect';
@@ -290,17 +329,57 @@ function setConnectionUI(mode) {
     connectBtnLabel.textContent = 'Disconnect';
     statusLabel.textContent = 'PROTECTED';
     statusCaption.textContent = 'Traffic is secured through the PQ tunnel';
-    metaVirtualIp.textContent = '10.8.0.5';
-    metaEncryption.textContent = 'Secured (Kyber Hybrid Matrix)';
+    metaVirtualIp.textContent = assignedIp;
+    metaEncryption.textContent = encryptionMatrix;
     metaLatency.textContent = `${26 + Math.round(Math.random() * 6)}ms`;
   }
 }
 
-connectBtn.addEventListener('click', () => {
+connectBtn.addEventListener('click', async () => {
   if (state.connection === 'disconnected') {
+    // 1. Force a live privilege verification check before starting
+    await runStartupPrivilegeValidation();
+
+    // Block initiation if user does not possess elevation privileges
+    if (!state.hasRootPrivileges) {
+      alert("⚠️ Root/Administrator elevation required. Please restart your python local_api.py core with sudo or Administrator permissions to allow virtual interface management.");
+      return;
+    }
+
     setConnectionUI('connecting');
-    setTimeout(() => setConnectionUI('connected'), 1400);
+
+    try {
+      // 2. Fetch the virtual map data dynamically from local engine
+      const response = await fetch(`${BACKEND_URL}/api/v1/tunnel/initiate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          gateway_ip: "198.51.100.1", // Targets AWS Cloud control coordinates
+          gateway_port: 51820,
+          force_tunnel: true
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.detail || "Server negotiation blocked.");
+      }
+
+      const data = await response.json();
+
+      // Delay transition momentarily to preserve UI loading physics
+      setTimeout(() => {
+        setConnectionUI('connected', data.target_ip, data.encryption_matrix);
+      }, 1000);
+
+    } catch (error) {
+      console.error("[PQC Tunnel Initiation Failed]", error);
+      alert(`Initialization Error: ${error.message}`);
+      setConnectionUI('disconnected');
+    }
+
   } else if (state.connection === 'connected') {
+    // Simple disconnect resets state variables instantly
     setConnectionUI('disconnected');
   }
 });
@@ -379,10 +458,16 @@ setInterval(tickThroughput, 900);
 // =====================================================================
 // INIT
 // =====================================================================
-renderCountryList();
-setConnectionUI('disconnected');
-requestAnimationFrame(() => {
-  const c = COUNTRIES.find(x => x.id === state.selected);
-  moveLatticeAnchor(c.x, c.y);
+document.addEventListener("DOMContentLoaded", () => {
+  renderCountryList();
+  setConnectionUI('disconnected');
+  
+  // Initial system privilege interrogation directly on boot
+  runStartupPrivilegeValidation();
+
+  requestAnimationFrame(() => {
+    const c = COUNTRIES.find(x => x.id === state.selected);
+    if (c) moveLatticeAnchor(c.x, c.y);
+  });
+  drawSparkline();
 });
-drawSparkline();
