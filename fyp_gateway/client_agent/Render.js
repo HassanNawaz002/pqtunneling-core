@@ -61,7 +61,7 @@ async function runStartupPrivilegeValidation() {
 
     console.log(`[PQC Monitor] System privilege validated. Elevated Status: ${state.hasRootPrivileges}`);
     
-    if (!state.hasRootPrivileges) {
+    if (state.hasRootPrivileges === false) {
       // Soft warnings visually displayed on UI
       statusLabel.textContent = "SUDO / ADMIN REQUIRED";
       statusCaption.textContent = "Virtual network interface requires elevated rights to initialize.";
@@ -74,6 +74,7 @@ async function runStartupPrivilegeValidation() {
     }
   } catch (err) {
     console.error("[PQC Core Bridge Error] Unable to check privileges:", err);
+    state.hasRootPrivileges = false; // Mark false on backend connection failure
     statusLabel.textContent = "BACKEND DISCONNECTED";
     statusCaption.textContent = "Ensure 'python local_api.py' is running on port 8001.";
     statusCaption.style.color = "#ffdd57";
@@ -291,7 +292,7 @@ window.addEventListener('resize', () => {
 });
 
 // =====================================================================
-// CONNECT / DISCONNECT FLOW (With API Integration)
+// CONNECT / DISCONNECT FLOW (With API Integration & Sudo Lock)
 // =====================================================================
 const connectBtn = document.getElementById('connectBtn');
 const connectBtnLabel = document.getElementById('connectBtnLabel');
@@ -336,25 +337,33 @@ function setConnectionUI(mode, assignedIp = '10.8.0.5', encryptionMatrix = 'Secu
 }
 
 connectBtn.addEventListener('click', async () => {
+  // 1. Force dynamic validation with backend before changing state
+  await runStartupPrivilegeValidation();
+
+  // STAGE 1 BLOCKER: Stop action instantly if root authorization is missing
+  if (state.hasRootPrivileges === false) {
+    console.error("[SECURITY BARRIER] Activation blocked. Root/Administrator authorization required.");
+    
+    // Set UI directly into alert state
+    statusLabel.textContent = "SUDO / ADMIN REQUIRED";
+    statusLabel.style.color = "#ff4a4a";
+    statusCaption.textContent = "Cannot provision virtual network interface (TUN) without sudo/admin permissions.";
+    statusCaption.style.color = "#ff4a4a";
+    
+    alert("❌ SECURITY CONTROL: PQ Tunneling cannot start without Root/Administrator privileges.\n\nPlease launch the backend_core using 'sudo' or as Administrator.");
+    return; // STOP EXECUTION ENTIRELY
+  }
+
   if (state.connection === 'disconnected') {
-    // 1. Force a live privilege verification check before starting
-    await runStartupPrivilegeValidation();
-
-    // Block initiation if user does not possess elevation privileges
-    if (!state.hasRootPrivileges) {
-      alert("⚠️ Root/Administrator elevation required. Please restart your python local_api.py core with sudo or Administrator permissions to allow virtual interface management.");
-      return;
-    }
-
     setConnectionUI('connecting');
 
     try {
-      // 2. Fetch the virtual map data dynamically from local engine
+      // 2. Fetch connection parameters from active elevated local engine
       const response = await fetch(`${BACKEND_URL}/api/v1/tunnel/initiate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          gateway_ip: "198.51.100.1", // Targets AWS Cloud control coordinates
+          gateway_ip: "198.51.100.1", 
           gateway_port: 51820,
           force_tunnel: true
         })
@@ -379,7 +388,7 @@ connectBtn.addEventListener('click', async () => {
     }
 
   } else if (state.connection === 'connected') {
-    // Simple disconnect resets state variables instantly
+    // Reset back to normal safe state
     setConnectionUI('disconnected');
   }
 });
