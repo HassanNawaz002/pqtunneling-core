@@ -1,37 +1,41 @@
 // =====================================================================
 // PQ Tunneling — renderer process script
+// STAGE 1 REVISION: Root/Sudo Checks Disabled for Direct Logic Verification
+// Compatible with Windows & Ubuntu (File System Case-Insensitive Mapping)
 // =====================================================================
 
 // ---- Optional Electron window controls (safe no-op outside Electron) ----
 let ipcRenderer = null;
-try { ipcRenderer = require('electron').ipcRenderer; } catch (e) { /* running in plain browser preview */ }
+try {
+  // Use try-catch to ensure normal browser load doesn't crash on require
+  ipcRenderer = require('electron').ipcRenderer;
+} catch (e) {
+  console.log("[PQ Render UI] Native Electron controls not available (normal browser load).");
+}
 
-document.getElementById('wcMin').addEventListener('click', () => ipcRenderer && ipcRenderer.send('window-minimize'));
-document.getElementById('wcMax').addEventListener('click', () => ipcRenderer && ipcRenderer.send('window-maximize'));
-document.getElementById('wcClose').addEventListener('click', () => ipcRenderer && ipcRenderer.send('window-close'));
+const wcMin = document.getElementById('wcMin');
+const wcMax = document.getElementById('wcMax');
+const wcClose = document.getElementById('wcClose');
+
+if (wcMin) wcMin.addEventListener('click', () => ipcRenderer && ipcRenderer.send('window-minimize'));
+if (wcMax) wcMax.addEventListener('click', () => ipcRenderer && ipcRenderer.send('window-maximize'));
+if (wcClose) wcClose.addEventListener('click', () => ipcRenderer && ipcRenderer.send('window-close'));
 
 // =====================================================================
-// DATA
+// DATA & STATE
 // =====================================================================
 const COUNTRIES = [
   { id: 'fastest', name: 'Fastest Node', flag: '⚡', servers: 'Auto-selected', tier: 'high', fastest: true, x: 505, y: 165 },
-  { id: 'af', name: 'Afghanistan', flag: '🇦🇫', servers: '4 servers', tier: 'med', x: 640, y: 195 },
-  { id: 'al', name: 'Albania', flag: '🇦🇱', servers: '6 servers', tier: 'high', x: 545, y: 155 },
-  { id: 'dz', name: 'Algeria', flag: '🇩🇿', servers: '8 servers', tier: 'high', x: 500, y: 195 },
   { id: 'us', name: 'United States', flag: '🇺🇸', servers: '312 servers', tier: 'high', x: 210, y: 165 },
   { id: 'de', name: 'Germany', flag: '🇩🇪', servers: '184 servers', tier: 'high', x: 505, y: 130 },
   { id: 'jp', name: 'Japan', flag: '🇯🇵', servers: '96 servers', tier: 'high', x: 855, y: 175 },
   { id: 'br', name: 'Brazil', flag: '🇧🇷', servers: '52 servers', tier: 'med', x: 300, y: 340 },
-  { id: 'au', name: 'Australia', flag: '🇦🇺', servers: '44 servers', tier: 'high', x: 830, y: 380 },
-  { id: 'za', name: 'South Africa', flag: '🇿🇦', servers: '18 servers', tier: 'med', x: 545, y: 370 },
-  { id: 'in', name: 'India', flag: '🇮🇳', servers: '61 servers', tier: 'med', x: 690, y: 210 },
   { id: 'gb', name: 'United Kingdom', flag: '🇬🇧', servers: '140 servers', tier: 'high', x: 480, y: 120 },
 ];
 
 const FILTER_TAGS = {
   'secure-core': ['de', 'jp', 'us', 'gb'],
-  'p2p': ['de', 'us', 'br', 'au'],
-  'tor': ['al'],
+  'p2p': ['de', 'us', 'br'],
 };
 
 let state = {
@@ -40,49 +44,121 @@ let state = {
   filter: 'all',
   search: '',
   selected: 'fastest',
-  hasRootPrivileges: false // Tracks system-level elevation status dynamically
 };
 
 // =====================================================================
-// INTEGRATION UTILITIES (FastAPI Core Operations Bridge)
+// API INTEGRATION CONFIG
 // =====================================================================
+// Explicitly targeting port 8001 where local_api.py listens
 const BACKEND_URL = 'http://127.0.0.1:8001';
 
-/**
- * Interrogates the local core API to check if it has administrative access.
- */
-async function runStartupPrivilegeValidation() {
-  try {
-    const response = await fetch(`${BACKEND_URL}/api/v1/system/privilege-check`);
-    if (!response.ok) throw new Error("Failed to contact the backend service.");
-    
-    const data = await response.json();
-    state.hasRootPrivileges = data.has_root_privileges;
+// =====================================================================
+// CONNECT / DISCONNECT FLOW (With Sudo/Privilege Lock Disabled)
+// =====================================================================
+const connectBtn = document.getElementById('connectBtn');
+const connectBtnLabel = document.getElementById('connectBtnLabel');
+const statusShelf = document.getElementById('statusShelf');
+const statusLabel = document.getElementById('statusLabel');
+const statusCaption = document.getElementById('statusCaption');
+const metaVirtualIp = document.getElementById('metaVirtualIp');
+const metaEncryption = document.getElementById('metaEncryption');
+const metaLatency = document.getElementById('metaLatency');
 
-    console.log(`[PQC Monitor] System privilege validated. Elevated Status: ${state.hasRootPrivileges}`);
-    
-    if (state.hasRootPrivileges === false) {
-      // Soft warnings visually displayed on UI
-      statusLabel.textContent = "SUDO / ADMIN REQUIRED";
-      statusCaption.textContent = "Virtual network interface requires elevated rights to initialize.";
-      statusCaption.style.color = "#ff4a4a";
-    } else {
-      // Restore default labels if running with complete elevation
-      statusLabel.textContent = "UNPROTECTED";
-      statusCaption.textContent = "Traffic is not passing through the PQ tunnel";
-      statusCaption.style.color = "";
-    }
-  } catch (err) {
-    console.error("[PQC Core Bridge Error] Unable to check privileges:", err);
-    state.hasRootPrivileges = false; // Mark false on backend connection failure
-    statusLabel.textContent = "BACKEND DISCONNECTED";
-    statusCaption.textContent = "Ensure 'python local_api.py' is running on port 8001.";
-    statusCaption.style.color = "#ffdd57";
+/**
+ * Main UI transition logic for the tunneling states.
+ */
+function setConnectionUI(mode, assignedIp = '10.8.0.5', encryptionMatrix = 'Secured (Kyber Hybrid Matrix)') {
+  if (!connectBtn) return;
+  state.connection = mode;
+  connectBtn.classList.remove('connected', 'connecting');
+  if (statusShelf) statusShelf.classList.remove('protected');
+  if (statusCaption) statusCaption.style.color = "";
+
+  if (mode === 'disconnected') {
+    if (connectBtnLabel) connectBtnLabel.textContent = 'Connect';
+    if (statusLabel) statusLabel.textContent = 'UNPROTECTED';
+    if (statusCaption) statusCaption.textContent = 'Traffic is not passing through the PQ tunnel';
+    if (metaVirtualIp) metaVirtualIp.textContent = '—';
+    if (metaEncryption) metaEncryption.textContent = 'Inactive';
+    if (metaLatency) metaLatency.textContent = '—';
+  } else if (mode === 'connecting') {
+    connectBtn.classList.add('connecting');
+    if (connectBtnLabel) connectBtnLabel.textContent = 'Negotiating…';
+    if (statusLabel) statusLabel.textContent = 'ESTABLISHING TUNNEL';
+    if (statusCaption) statusCaption.textContent = 'Performing dynamic ML-KEM-1024 / X25519 key exchange...';
+    if (metaVirtualIp) metaVirtualIp.textContent = 'Provisioning…';
+    if (metaEncryption) metaEncryption.textContent = 'Handshake in progress';
+    if (metaLatency) metaLatency.textContent = '—';
+  } else if (mode === 'connected') {
+    connectBtn.classList.add('connected');
+    if (statusShelf) statusShelf.classList.add('protected');
+    if (connectBtnLabel) connectBtnLabel.textContent = 'Disconnect';
+    if (statusLabel) statusLabel.textContent = 'PROTECTED';
+    if (statusCaption) statusCaption.textContent = 'Traffic is secured through the PQ tunnel';
+    if (metaVirtualIp) metaVirtualIp.textContent = assignedIp;
+    if (metaEncryption) metaEncryption.textContent = encryptionMatrix;
+    // Latency generation for visual effect
+    if (metaLatency) metaLatency.textContent = `${25 + Math.round(Math.random() * 8)}ms`;
   }
 }
 
+/**
+ * Handle connection button logic directly, skipping privilege validation.
+ */
+if (connectBtn) {
+  connectBtn.addEventListener('click', async () => {
+    console.log("[DEBUG Click] Connect Button Clicked!");
+
+    if (state.connection === 'disconnected') {
+      console.log("[DEBUG Action] Attempting Connection flow (skipping sudo check stage)...");
+      setConnectionUI('connecting');
+
+      try {
+        const payload = {
+          gateway_ip: "198.51.100.1", // Mock target gateway IP
+          gateway_port: 51820,
+          force_tunnel: true
+        };
+        console.log(`[DEBUG Request] Fetching from ${BACKEND_URL}/api/v1/tunnel/initiate...`);
+
+        // Fetch connection parameters directly from elevated local engine
+        const response = await fetch(`${BACKEND_URL}/api/v1/tunnel/initiate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        console.log(`[DEBUG Response] Status received: ${response.status}`);
+
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.detail || "Server negotiation blocked by core engine.");
+        }
+
+        const data = await response.json();
+        console.log("[DEBUG Response Data]", data);
+
+        // Transition dynamically after negotiation completion simulation
+        setTimeout(() => {
+          setConnectionUI('connected', data.target_ip, data.encryption_matrix);
+        }, 1100);
+
+      } catch (error) {
+        console.error("[PQC Tunnel Initiation Failed]", error);
+        alert(`Verification Error (Check if backend_core is running on port 8001): ${error.message}`);
+        setConnectionUI('disconnected');
+      }
+
+    } else if (state.connection === 'connected') {
+      console.log("[DEBUG Action] Disconnecting...");
+      // Reset back to normal safe state
+      setConnectionUI('disconnected');
+    }
+  });
+}
+
 // =====================================================================
-// COUNTRY LIST
+// COUNTRY LIST (Visual Render Engine)
 // =====================================================================
 function passesFilter(c) {
   if (state.filter === 'all') return true;
@@ -97,6 +173,7 @@ function passesSearch(c) {
 
 function renderCountryList() {
   const listEl = document.getElementById('countryList');
+  if (!listEl) return;
   const items = COUNTRIES.filter(c => passesFilter(c) && passesSearch(c));
   listEl.innerHTML = '';
 
@@ -124,25 +201,22 @@ function renderCountryList() {
 function selectCountry(id) {
   state.selected = id;
   const c = COUNTRIES.find(x => x.id === id);
-  document.getElementById('fastestTitle').textContent =
-    c.fastest ? 'Fastest Node — Frankfurt, DE' : `Selected Node — ${c.name}`;
+  const titleEl = document.getElementById('fastestTitle');
+  if (titleEl) {
+    titleEl.textContent = c.fastest ? 'Fastest Node — Frankfurt, DE' : `Selected Node — ${c.name}`;
+  }
   renderCountryList();
   moveLatticeAnchor(c.x, c.y);
 }
 
-document.getElementById('searchInput').addEventListener('input', (e) => {
-  state.search = e.target.value;
-  renderCountryList();
-});
-
-document.querySelectorAll('.seg-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.seg-tab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    state.segment = tab.dataset.seg;
+// Visual Toggles & Search Bindings
+const searchInput = document.getElementById('searchInput');
+if (searchInput) {
+  searchInput.addEventListener('input', (e) => {
+    state.search = e.target.value;
     renderCountryList();
   });
-});
+}
 
 document.querySelectorAll('.chip').forEach(chip => {
   chip.addEventListener('click', () => {
@@ -153,89 +227,47 @@ document.querySelectorAll('.chip').forEach(chip => {
   });
 });
 
-document.querySelectorAll('.tbtab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tbtab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-  });
-});
-
 // =====================================================================
-// WORLD MAP — stylized geometric dot-grid continents + server nodes
+// WORLD MAP — Geometric Dot-Grid Layout
 // =====================================================================
 const svgNS = 'http://www.w3.org/2000/svg';
 const worldSvg = document.getElementById('worldSvg');
 
-// Simplified continental silhouettes as polylines (stylized, not geographic truth)
-const LANDMASSES = [
-  // North America
-  'M120,90 L230,70 L260,110 L250,170 L200,230 L150,220 L110,180 L95,130 Z',
-  // South America
-  'M240,260 L300,250 L330,320 L300,420 L260,440 L230,380 L235,300 Z',
-  // Europe
-  'M460,80 L560,70 L580,120 L540,150 L470,140 Z',
-  // Africa
-  'M470,170 L580,165 L610,260 L570,400 L510,410 L470,300 L460,220 Z',
-  // Asia
-  'M600,60 L820,50 L900,140 L860,230 L720,240 L630,180 L590,110 Z',
-  // Australia
-  'M780,360 L880,355 L900,410 L840,430 L780,410 Z',
-];
-
-LANDMASSES.forEach(d => {
-  const path = document.createElementNS(svgNS, 'path');
-  path.setAttribute('d', d);
-  path.setAttribute('class', 'world-land');
-  worldSvg.appendChild(path);
-});
-
-// Background dot grid (evokes lattice/vector field of the PQ theme)
-const GRID_GROUP = document.createElementNS(svgNS, 'g');
-for (let x = 20; x < 1000; x += 26) {
-  for (let y = 20; y < 500; y += 26) {
-    const dot = document.createElementNS(svgNS, 'circle');
-    dot.setAttribute('cx', x);
-    dot.setAttribute('cy', y);
-    dot.setAttribute('r', 0.9);
-    dot.setAttribute('class', 'world-grid-dot');
-    GRID_GROUP.appendChild(dot);
+if (worldSvg) {
+  const GRID_GROUP = document.createElementNS(svgNS, 'g');
+  for (let x = 20; x < 1000; x += 26) {
+    for (let y = 20; y < 500; y += 26) {
+      const dot = document.createElementNS(svgNS, 'circle');
+      dot.setAttribute('cx', x);
+      dot.setAttribute('cy', y);
+      dot.setAttribute('r', 0.9);
+      dot.setAttribute('class', 'world-grid-dot');
+      GRID_GROUP.appendChild(dot);
+    }
   }
-}
-worldSvg.insertBefore(GRID_GROUP, worldSvg.firstChild);
+  worldSvg.insertBefore(GRID_GROUP, worldSvg.firstChild);
 
-// Server nodes at each country's coordinates
-COUNTRIES.forEach(c => {
-  const node = document.createElementNS(svgNS, 'circle');
-  node.setAttribute('cx', c.x);
-  node.setAttribute('cy', c.y);
-  node.setAttribute('r', 2);
-  node.setAttribute('class', 'server-node pulse');
-  node.style.animationDelay = `${Math.random() * 2}s`;
-  worldSvg.appendChild(node);
-});
+  COUNTRIES.forEach(c => {
+    const node = document.createElementNS(svgNS, 'circle');
+    node.setAttribute('cx', c.x);
+    node.setAttribute('cy', c.y);
+    node.setAttribute('r', 2);
+    node.setAttribute('class', 'server-node pulse');
+    node.style.animationDelay = `${Math.random() * 2}s`;
+    worldSvg.appendChild(node);
+  });
+}
 
 // =====================================================================
-// LATTICE RADAR — signature element referencing lattice-based PQC
+// LATTICE RADAR INTEGRATION
 // =====================================================================
 function buildHexLattice() {
   const group = document.getElementById('latticeHex');
-  const rings = document.getElementById('latticeRings');
+  if (!group) return;
   group.innerHTML = '';
-  rings.innerHTML = '';
-
   const cx = 150, cy = 150;
   const hexR = 22;
 
-  // concentric faint rings
-  [40, 75, 110].forEach((r, i) => {
-    const c = document.createElementNS(svgNS, 'circle');
-    c.setAttribute('cx', cx); c.setAttribute('cy', cy); c.setAttribute('r', r);
-    c.setAttribute('stroke-width', 0.7);
-    c.setAttribute('opacity', 0.14 + i * 0.04);
-    rings.appendChild(c);
-  });
-
-  // hex-lattice: rings of hexagon centers around the anchor (lattice points)
   const points = [{ x: cx, y: cy }];
   for (let ring = 1; ring <= 2; ring++) {
     for (let i = 0; i < 6; i++) {
@@ -246,23 +278,6 @@ function buildHexLattice() {
     }
   }
 
-  // connective edges (only near-neighbors, to read as a lattice mesh)
-  points.forEach((p1, i) => {
-    points.forEach((p2, j) => {
-      if (j <= i) return;
-      const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
-      if (dist < hexR * 1.8) {
-        const line = document.createElementNS(svgNS, 'line');
-        line.setAttribute('x1', p1.x); line.setAttribute('y1', p1.y);
-        line.setAttribute('x2', p2.x); line.setAttribute('y2', p2.y);
-        line.setAttribute('stroke', 'rgba(41,240,255,0.22)');
-        line.setAttribute('stroke-width', 0.6);
-        group.appendChild(line);
-      }
-    });
-  });
-
-  // lattice point nodes
   points.forEach((p, i) => {
     const dot = document.createElementNS(svgNS, 'circle');
     dot.setAttribute('cx', p.x); dot.setAttribute('cy', p.y);
@@ -274,9 +289,10 @@ function buildHexLattice() {
 buildHexLattice();
 
 function moveLatticeAnchor(mapX, mapY) {
-  // Position the lattice radar overlay above the selected node on the map
   const radar = document.getElementById('latticeRadar');
-  const canvasRect = document.getElementById('mapCanvas').getBoundingClientRect();
+  const canvas = document.getElementById('mapCanvas');
+  if (!radar || !canvas) return;
+  const canvasRect = canvas.getBoundingClientRect();
   const viewBoxW = 1000, viewBoxH = 520;
   const scale = Math.min(canvasRect.width / viewBoxW, canvasRect.height / viewBoxH);
   const offsetX = (canvasRect.width - viewBoxW * scale) / 2;
@@ -286,197 +302,17 @@ function moveLatticeAnchor(mapX, mapY) {
   radar.style.left = `${px}px`;
   radar.style.top = `${py}px`;
 }
-window.addEventListener('resize', () => {
-  const c = COUNTRIES.find(x => x.id === state.selected);
-  if (c) moveLatticeAnchor(c.x, c.y);
-});
-
-// =====================================================================
-// CONNECT / DISCONNECT FLOW (With API Integration & Sudo Lock)
-// =====================================================================
-const connectBtn = document.getElementById('connectBtn');
-const connectBtnLabel = document.getElementById('connectBtnLabel');
-const statusShelf = document.getElementById('statusShelf');
-const statusLabel = document.getElementById('statusLabel');
-const statusCaption = document.getElementById('statusCaption');
-const metaVirtualIp = document.getElementById('metaVirtualIp');
-const metaEncryption = document.getElementById('metaEncryption');
-const metaLatency = document.getElementById('metaLatency');
-
-function setConnectionUI(mode, assignedIp = '10.8.0.5', encryptionMatrix = 'Secured (Kyber Hybrid Matrix)') {
-  state.connection = mode;
-  connectBtn.classList.remove('connected', 'connecting');
-  statusShelf.classList.remove('protected');
-  statusCaption.style.color = "";
-
-  if (mode === 'disconnected') {
-    connectBtnLabel.textContent = 'Connect';
-    statusLabel.textContent = 'UNPROTECTED';
-    statusCaption.textContent = 'Traffic is not passing through the PQ tunnel';
-    metaVirtualIp.textContent = '—';
-    metaEncryption.textContent = 'Inactive';
-    metaLatency.textContent = '—';
-  } else if (mode === 'connecting') {
-    connectBtn.classList.add('connecting');
-    connectBtnLabel.textContent = 'Negotiating…';
-    statusLabel.textContent = 'ESTABLISHING TUNNEL';
-    statusCaption.textContent = 'Performing hybrid ML-KEM-1024 / X25519 key exchange';
-    metaVirtualIp.textContent = 'Pending…';
-    metaEncryption.textContent = 'Handshake in progress';
-    metaLatency.textContent = '—';
-  } else if (mode === 'connected') {
-    connectBtn.classList.add('connected');
-    statusShelf.classList.add('protected');
-    connectBtnLabel.textContent = 'Disconnect';
-    statusLabel.textContent = 'PROTECTED';
-    statusCaption.textContent = 'Traffic is secured through the PQ tunnel';
-    metaVirtualIp.textContent = assignedIp;
-    metaEncryption.textContent = encryptionMatrix;
-    metaLatency.textContent = `${26 + Math.round(Math.random() * 6)}ms`;
-  }
-}
-
-connectBtn.addEventListener('click', async () => {
-  // 1. Force dynamic validation with backend before changing state
-  await runStartupPrivilegeValidation();
-
-  // STAGE 1 BLOCKER: Stop action instantly if root authorization is missing
-  if (state.hasRootPrivileges === false) {
-    console.error("[SECURITY BARRIER] Activation blocked. Root/Administrator authorization required.");
-    
-    // Set UI directly into alert state
-    statusLabel.textContent = "SUDO / ADMIN REQUIRED";
-    statusLabel.style.color = "#ff4a4a";
-    statusCaption.textContent = "Cannot provision virtual network interface (TUN) without sudo/admin permissions.";
-    statusCaption.style.color = "#ff4a4a";
-    
-    alert("❌ SECURITY CONTROL: PQ Tunneling cannot start without Root/Administrator privileges.\n\nPlease launch the backend_core using 'sudo' or as Administrator.");
-    return; // STOP EXECUTION ENTIRELY
-  }
-
-  if (state.connection === 'disconnected') {
-    setConnectionUI('connecting');
-
-    try {
-      // 2. Fetch connection parameters from active elevated local engine
-      const response = await fetch(`${BACKEND_URL}/api/v1/tunnel/initiate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          gateway_ip: "198.51.100.1", 
-          gateway_port: 51820,
-          force_tunnel: true
-        })
-      });
-
-      if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.detail || "Server negotiation blocked.");
-      }
-
-      const data = await response.json();
-
-      // Delay transition momentarily to preserve UI loading physics
-      setTimeout(() => {
-        setConnectionUI('connected', data.target_ip, data.encryption_matrix);
-      }, 1000);
-
-    } catch (error) {
-      console.error("[PQC Tunnel Initiation Failed]", error);
-      alert(`Initialization Error: ${error.message}`);
-      setConnectionUI('disconnected');
-    }
-
-  } else if (state.connection === 'connected') {
-    // Reset back to normal safe state
-    setConnectionUI('disconnected');
-  }
-});
-
-// =====================================================================
-// UTILITY TOGGLES
-// =====================================================================
-document.querySelectorAll('.toggle').forEach(toggle => {
-  toggle.addEventListener('click', () => {
-    toggle.classList.toggle('on');
-    const key = toggle.dataset.toggle;
-    const subEl = document.getElementById(`${key}Sub`);
-    if (!subEl) return;
-    const isOn = toggle.classList.contains('on');
-    const copy = {
-      netshield: isOn ? 'Blocking ads & trackers' : 'Disabled',
-      killswitch: isOn ? 'Blocks traffic if tunnel drops' : 'Disabled — traffic exposed on drop',
-      portforward: isOn ? 'Forwarding port 51820' : 'Not configured',
-      splittunnel: isOn ? '3 apps routed outside tunnel' : 'Disabled — all traffic tunneled',
-    };
-    subEl.textContent = copy[key];
-  });
-});
-
-// =====================================================================
-// SPARKLINE — live throughput visualization
-// =====================================================================
-const spark = document.getElementById('sparkline');
-const sparkCtx = spark.getContext('2d');
-const throughputUp = document.getElementById('throughputUp');
-const throughputDown = document.getElementById('throughputDown');
-
-const HISTORY_LEN = 40;
-let upHistory = new Array(HISTORY_LEN).fill(0);
-let downHistory = new Array(HISTORY_LEN).fill(0);
-
-function fmtRate(v) {
-  if (v > 1024) return `${(v / 1024).toFixed(1)} MB/s`;
-  return `${v.toFixed(1)} KB/s`;
-}
-
-function tickThroughput() {
-  const active = state.connection === 'connected';
-  const nextUp = active ? Math.max(0, upHistory[upHistory.length - 1] + (Math.random() - 0.5) * 40 + 10) : 0;
-  const nextDown = active ? Math.max(0, downHistory[downHistory.length - 1] + (Math.random() - 0.5) * 90 + 20) : 0;
-  upHistory.push(nextUp); upHistory.shift();
-  downHistory.push(nextDown); downHistory.shift();
-  throughputUp.textContent = fmtRate(nextUp);
-  throughputDown.textContent = fmtRate(nextDown);
-  drawSparkline();
-}
-
-function drawSparkline() {
-  const w = spark.width, h = spark.height;
-  sparkCtx.clearRect(0, 0, w, h);
-  const maxVal = Math.max(...upHistory, ...downHistory, 20);
-
-  function drawLine(history, color) {
-    sparkCtx.beginPath();
-    history.forEach((v, i) => {
-      const x = (i / (HISTORY_LEN - 1)) * w;
-      const y = h - (v / maxVal) * (h - 4) - 2;
-      i === 0 ? sparkCtx.moveTo(x, y) : sparkCtx.lineTo(x, y);
-    });
-    sparkCtx.strokeStyle = color;
-    sparkCtx.lineWidth = 1.4;
-    sparkCtx.stroke();
-  }
-
-  drawLine(upHistory, 'rgba(255,61,154,0.85)');
-  drawLine(downHistory, 'rgba(41,240,255,0.85)');
-}
-
-setInterval(tickThroughput, 900);
 
 // =====================================================================
 // INIT
 // =====================================================================
 document.addEventListener("DOMContentLoaded", () => {
+  console.log("[DEBUG Init] Render.js Loaded (Visual Logic Test Mode)!");
   renderCountryList();
   setConnectionUI('disconnected');
-  
-  // Initial system privilege interrogation directly on boot
-  runStartupPrivilegeValidation();
 
   requestAnimationFrame(() => {
     const c = COUNTRIES.find(x => x.id === state.selected);
     if (c) moveLatticeAnchor(c.x, c.y);
   });
-  drawSparkline();
 });
