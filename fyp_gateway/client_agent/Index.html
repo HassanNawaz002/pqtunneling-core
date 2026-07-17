@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>PQ Tunneling</title>
-<link rel="stylesheet" href="Styles.css" />
+<link rel="stylesheet" href="styles.css" />
 </head>
 <body>
 
@@ -28,7 +28,7 @@
         <span class="brand-tag">HYBRID PQC GATEWAY</span>
       </div>
 
-      <nav class="titlebar-tabs">
+      <nav class="titlebar-tabs" id="titlebarTabs">
         <button class="tbtab active" data-tab="dashboard">Dashboard</button>
         <button class="tbtab" data-tab="lattice">Lattice Monitor</button>
         <button class="tbtab" data-tab="logs">Session Log</button>
@@ -41,7 +41,11 @@
       </div>
     </header>
 
-    <!-- ============ MAIN BODY ============ -->
+    <!-- ============ VIEW STACK ============ -->
+    <div class="view-stack" id="viewStack">
+
+    <!-- ============ DASHBOARD VIEW ============ -->
+    <div class="app-view active" id="view-dashboard" data-view="dashboard">
     <div class="app-body">
 
       <!-- ============ LEFT SIDEBAR ============ -->
@@ -184,6 +188,112 @@
         </div>
       </aside>
     </div>
+    </div>
+    <!-- /view-dashboard -->
+
+    <!-- ============ LATTICE MONITOR VIEW ============ -->
+    <div class="app-view" id="view-lattice" data-view="lattice">
+      <div class="panel-scroll">
+        <div class="panel-header">
+          <h2>Lattice Monitor</h2>
+          <p>Live diagnostics for the ML-KEM-1024 / ML-DSA-65 lattice subsystem</p>
+        </div>
+
+        <div class="stat-grid" id="latticeStatGrid">
+          <div class="stat-card">
+            <span class="stat-label">KEM Encapsulations</span>
+            <span class="stat-value" id="statKemOps">0</span>
+            <span class="stat-caption">operations this session</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Lattice Dimension</span>
+            <span class="stat-value">1024</span>
+            <span class="stat-caption">module rank k = 4 (ML-KEM-1024)</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Signature Verifications</span>
+            <span class="stat-value" id="statSigOps">0</span>
+            <span class="stat-caption">ML-DSA-65 checks this session</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Handshake Count</span>
+            <span class="stat-value" id="statHandshakes">0</span>
+            <span class="stat-caption">hybrid X25519 + ML-KEM handshakes</span>
+          </div>
+        </div>
+
+        <div class="panel-subhead">Noise Budget (mock telemetry)</div>
+        <canvas id="noiseChart" width="900" height="120"></canvas>
+
+        <div class="panel-subhead">Last Handshake</div>
+        <div class="kv-table" id="lastHandshakeTable">
+          <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val" id="lhStatus">No handshake yet</span></div>
+          <div class="kv-row"><span class="kv-key">KEM</span><span class="kv-val">ML-KEM-1024</span></div>
+          <div class="kv-row"><span class="kv-key">Classical Hybrid</span><span class="kv-val">X25519</span></div>
+          <div class="kv-row"><span class="kv-key">KDF</span><span class="kv-val">HKDF-SHA-256</span></div>
+          <div class="kv-row"><span class="kv-key">AEAD</span><span class="kv-val">AES-GCM-256</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ SESSION LOG VIEW ============ -->
+    <div class="app-view" id="view-logs" data-view="logs">
+      <div class="panel-scroll">
+        <div class="panel-header">
+          <h2>Session Log</h2>
+          <p>Local event trace for this session — nothing here is transmitted</p>
+        </div>
+        <div class="log-toolbar">
+          <span class="log-count" id="logCount">0 events</span>
+          <button class="log-clear-btn" id="logClearBtn">Clear log</button>
+        </div>
+        <div class="log-console" id="logConsole"></div>
+      </div>
+    </div>
+
+    <!-- ============ SETTINGS VIEW ============ -->
+    <div class="app-view" id="view-settings" data-view="settings">
+      <div class="panel-scroll">
+        <div class="panel-header">
+          <h2>Settings</h2>
+          <p>Gateway configuration</p>
+        </div>
+
+        <div class="settings-group">
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-title">Auto-connect on launch</div>
+              <div class="settings-row-sub">Establish the tunnel automatically when PQ Tunneling starts</div>
+            </div>
+            <button class="toggle" data-setting="autoconnect"><span class="toggle-knob"></span></button>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-title">Start with system</div>
+              <div class="settings-row-sub">Launch PQ Tunneling on boot</div>
+            </div>
+            <button class="toggle on" data-setting="startonboot"><span class="toggle-knob"></span></button>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-title">Prefer hybrid PQC handshake</div>
+              <div class="settings-row-sub">Fall back to classical X25519-only if a peer can't negotiate ML-KEM</div>
+            </div>
+            <button class="toggle on" data-setting="preferhybrid"><span class="toggle-knob"></span></button>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-title">Verbose session logging</div>
+              <div class="settings-row-sub">Record handshake and toggle events to the Session Log</div>
+            </div>
+            <button class="toggle on" data-setting="verboselog"><span class="toggle-knob"></span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    </div>
+    <!-- /view-stack -->
 
     <!-- ============ FOOTER DIAGNOSTIC SHELF ============ -->
     <footer class="status-shelf" id="statusShelf">
@@ -231,13 +341,6 @@
 
   </div>
 
-<script src="Render.js"></script>
+<script src="render.js"></script>
 </body>
 </html>
-
-
-
-
-
-
-
