@@ -34,13 +34,59 @@ const FILTER_TAGS = {
   'tor': ['al'],
 };
 
+// Recently connected nodes (most recent first)
+const RECENTS = [
+  { countryId: 'de', when: '12 minutes ago' },
+  { countryId: 'us', when: '3 hours ago' },
+  { countryId: 'jp', when: 'Yesterday' },
+  { countryId: 'gb', when: '2 days ago' },
+];
+
+// Saved connection profiles
+const PROFILES = [
+  { id: 'p1', name: 'Work — Frankfurt', countryId: 'de', desc: 'Secure Core · Kill Switch on' },
+  { id: 'p2', name: 'Streaming — Tokyo', countryId: 'jp', desc: 'P2P enabled · Split tunnel on' },
+  { id: 'p3', name: 'Privacy Max', countryId: 'al', desc: 'Tor over PQ tunnel' },
+];
+
 let state = {
   connection: 'disconnected', // disconnected | connecting | connected
   segment: 'recents',
   filter: 'all',
   search: '',
   selected: 'fastest',
+  selectedProfile: null,
 };
+
+// =====================================================================
+// SESSION LOG — real event trace, feeds the Session Log view
+// =====================================================================
+const eventLog = [];
+
+function addLog(message, level = 'info') {
+  const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  eventLog.push({ ts, message, level });
+  renderLog();
+}
+
+function renderLog() {
+  const consoleEl = document.getElementById('logConsole');
+  const countEl = document.getElementById('logCount');
+  if (!consoleEl) return;
+  countEl.textContent = `${eventLog.length} event${eventLog.length === 1 ? '' : 's'}`;
+  // column-reverse container, so append in order and newest visually ends up on top
+  consoleEl.innerHTML = eventLog.map(e => `
+    <div class="log-line log-${e.level}">
+      <span class="log-ts">${e.ts}</span><span class="log-tag">[${e.level.toUpperCase()}]</span>${e.message}
+    </div>
+  `).join('');
+}
+
+document.getElementById('logClearBtn').addEventListener('click', () => {
+  eventLog.length = 0;
+  renderLog();
+  addLog('Session log cleared', 'info');
+});
 
 // =====================================================================
 // COUNTRY LIST
@@ -56,30 +102,93 @@ function passesSearch(c) {
   return c.name.toLowerCase().includes(state.search.toLowerCase());
 }
 
+function countryRowHtml(c) {
+  return `
+    <span class="country-flag">${c.flag}</span>
+    <span class="country-name">${c.name}${c.fastest ? `<span class="badge-fastest" title="Fastest">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 L4 14 H11 L10 22 L20 9 H13 Z"/></svg>
+    </span>` : ''}</span>
+    <span class="country-servers">${c.servers}</span>
+    <span class="row-signal"><span></span><span></span><span></span></span>
+  `;
+}
+
 function renderCountryList() {
   const listEl = document.getElementById('countryList');
-  const items = COUNTRIES.filter(c => passesFilter(c) && passesSearch(c));
+  const filterChips = document.getElementById('filterChips');
   listEl.innerHTML = '';
 
+  // Filter chips only make sense against the full country directory
+  filterChips.style.display = state.segment === 'countries' ? 'flex' : 'none';
+
+  if (state.segment === 'recents') {
+    const items = RECENTS
+      .map(r => ({ ...COUNTRIES.find(c => c.id === r.countryId), when: r.when }))
+      .filter(c => c && c.name.toLowerCase().includes(state.search.toLowerCase()));
+
+    if (items.length === 0) {
+      listEl.innerHTML = emptyState(`No recent connections match “${state.search}”`);
+      return;
+    }
+    items.forEach(c => {
+      const row = document.createElement('div');
+      row.className = `country-row ${c.tier}${state.selected === c.id ? ' selected' : ''}`;
+      row.innerHTML = `
+        <span class="country-flag">${c.flag}</span>
+        <span class="country-name">${c.name}<span class="recent-time">${c.when}</span></span>
+        <span class="row-signal"><span></span><span></span><span></span></span>
+      `;
+      row.addEventListener('click', () => selectCountry(c.id));
+      listEl.appendChild(row);
+    });
+    return;
+  }
+
+  if (state.segment === 'profiles') {
+    const items = PROFILES.filter(p => p.name.toLowerCase().includes(state.search.toLowerCase()));
+    if (items.length === 0) {
+      listEl.innerHTML = emptyState(`No profiles match “${state.search}”`);
+      return;
+    }
+    items.forEach(p => {
+      const c = COUNTRIES.find(x => x.id === p.countryId);
+      const card = document.createElement('div');
+      card.className = `profile-card${state.selectedProfile === p.id ? ' selected' : ''}`;
+      card.innerHTML = `
+        <div class="profile-card-top">
+          <span class="profile-name">${p.name}</span>
+          <span class="profile-flag">${c ? c.flag : '🌐'}</span>
+        </div>
+        <div class="profile-desc">${p.desc}</div>
+      `;
+      card.addEventListener('click', () => {
+        state.selectedProfile = p.id;
+        addLog(`Loaded profile "${p.name}"`, 'info');
+        if (c) selectCountry(c.id); else renderCountryList();
+      });
+      listEl.appendChild(card);
+    });
+    return;
+  }
+
+  // segment === 'countries'
+  const items = COUNTRIES.filter(c => passesFilter(c) && passesSearch(c));
+  if (items.length === 0) {
+    listEl.innerHTML = emptyState(`No locations match “${state.search}”`);
+    return;
+  }
   items.forEach(c => {
     const row = document.createElement('div');
     row.className = `country-row ${c.tier}${state.selected === c.id ? ' selected' : ''}`;
     row.dataset.id = c.id;
-    row.innerHTML = `
-      <span class="country-flag">${c.flag}</span>
-      <span class="country-name">${c.name}${c.fastest ? `<span class="badge-fastest" title="Fastest">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 L4 14 H11 L10 22 L20 9 H13 Z"/></svg>
-      </span>` : ''}</span>
-      <span class="country-servers">${c.servers}</span>
-      <span class="row-signal"><span></span><span></span><span></span></span>
-    `;
+    row.innerHTML = countryRowHtml(c);
     row.addEventListener('click', () => selectCountry(c.id));
     listEl.appendChild(row);
   });
+}
 
-  if (items.length === 0) {
-    listEl.innerHTML = `<div style="padding:20px 8px; font-size:11px; color:var(--text-tertiary); text-align:center;">No locations match “${state.search}”</div>`;
-  }
+function emptyState(msg) {
+  return `<div style="padding:20px 8px; font-size:11px; color:var(--text-tertiary); text-align:center;">${msg}</div>`;
 }
 
 function selectCountry(id) {
@@ -89,6 +198,7 @@ function selectCountry(id) {
     c.fastest ? 'Fastest Node — Frankfurt, DE' : `Selected Node — ${c.name}`;
   renderCountryList();
   moveLatticeAnchor(c.x, c.y);
+  addLog(`Selected node: ${c.name}`, 'info');
 }
 
 document.getElementById('searchInput').addEventListener('input', (e) => {
@@ -114,10 +224,36 @@ document.querySelectorAll('.chip').forEach(chip => {
   });
 });
 
+// ---- Titlebar tabs: Dashboard / Lattice Monitor / Session Log ----
+function switchView(viewName) {
+  document.querySelectorAll('.tbtab').forEach(t => t.classList.toggle('active', t.dataset.tab === viewName));
+  document.querySelectorAll('.app-view').forEach(v => v.classList.toggle('active', v.dataset.view === viewName));
+  if (viewName === 'dashboard') {
+    // map-canvas has zero size while hidden, so re-anchor the lattice overlay now that it's visible again
+    requestAnimationFrame(() => {
+      const c = COUNTRIES.find(x => x.id === state.selected);
+      if (c) moveLatticeAnchor(c.x, c.y);
+    });
+  }
+}
+
 document.querySelectorAll('.tbtab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tbtab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
+  tab.addEventListener('click', () => switchView(tab.dataset.tab));
+});
+
+// Settings gear in the right dock opens the Settings view (no titlebar tab for it,
+// so we just clear titlebar highlighting and swap the visible panel)
+document.querySelector('.util-tile--settings').addEventListener('click', () => {
+  document.querySelectorAll('.tbtab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.app-view').forEach(v => v.classList.toggle('active', v.dataset.view === 'settings'));
+  addLog('Opened Settings', 'info');
+});
+
+document.querySelectorAll('[data-setting]').forEach(toggle => {
+  toggle.addEventListener('click', () => {
+    toggle.classList.toggle('on');
+    const isOn = toggle.classList.contains('on');
+    addLog(`Setting "${toggle.dataset.setting}" turned ${isOn ? 'on' : 'off'}`, 'info');
   });
 });
 
@@ -298,22 +434,81 @@ function setConnectionUI(mode) {
 
 connectBtn.addEventListener('click', () => {
   if (state.connection === 'disconnected') {
+    const c = COUNTRIES.find(x => x.id === state.selected);
     setConnectionUI('connecting');
-    setTimeout(() => setConnectionUI('connected'), 1400);
+    addLog(`Starting hybrid handshake with ${c ? c.name : 'selected node'}…`, 'info');
+    setTimeout(() => {
+      setConnectionUI('connected');
+      handshakeCount += 1;
+      addLog(`Tunnel established — ML-KEM-1024 + X25519, virtual IP 10.8.0.5`, 'ok');
+      updateLatticeMonitor();
+    }, 1400);
   } else if (state.connection === 'connected') {
     setConnectionUI('disconnected');
+    addLog('Tunnel disconnected', 'warn');
   }
 });
 
 // =====================================================================
+// LATTICE MONITOR — mock but live-updating diagnostics panel
+// =====================================================================
+let handshakeCount = 0;
+let kemOps = 0;
+let sigOps = 0;
+
+function updateLatticeMonitor() {
+  const statHandshakes = document.getElementById('statHandshakes');
+  const lhStatus = document.getElementById('lhStatus');
+  if (statHandshakes) statHandshakes.textContent = handshakeCount;
+  if (lhStatus) lhStatus.textContent = state.connection === 'connected'
+    ? `Complete — ${new Date().toLocaleTimeString('en-GB', { hour12: false })}`
+    : 'No handshake yet';
+}
+
+const noiseHistory = new Array(60).fill(0);
+function tickLatticeMonitor() {
+  const active = state.connection === 'connected';
+  if (active) {
+    kemOps += Math.round(Math.random() * 3);
+    sigOps += Math.round(Math.random() * 2);
+  }
+  const statKemOps = document.getElementById('statKemOps');
+  const statSigOps = document.getElementById('statSigOps');
+  if (statKemOps) statKemOps.textContent = kemOps;
+  if (statSigOps) statSigOps.textContent = sigOps;
+
+  noiseHistory.push(active ? 30 + Math.random() * 60 : Math.random() * 8);
+  noiseHistory.shift();
+  drawNoiseChart();
+}
+
+function drawNoiseChart() {
+  const canvas = document.getElementById('noiseChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.beginPath();
+  noiseHistory.forEach((v, i) => {
+    const x = (i / (noiseHistory.length - 1)) * w;
+    const y = h - (v / 100) * (h - 10) - 5;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = 'rgba(41,240,255,0.85)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
+setInterval(tickLatticeMonitor, 900);
+
+// =====================================================================
 // UTILITY TOGGLES
 // =====================================================================
-document.querySelectorAll('.toggle').forEach(toggle => {
+document.querySelectorAll('.toggle[data-toggle]').forEach(toggle => {
   toggle.addEventListener('click', () => {
     toggle.classList.toggle('on');
     const key = toggle.dataset.toggle;
     const subEl = document.getElementById(`${key}Sub`);
-    if (!subEl) return;
     const isOn = toggle.classList.contains('on');
     const copy = {
       netshield: isOn ? 'Blocking ads & trackers' : 'Disabled',
@@ -321,7 +516,8 @@ document.querySelectorAll('.toggle').forEach(toggle => {
       portforward: isOn ? 'Forwarding port 51820' : 'Not configured',
       splittunnel: isOn ? '3 apps routed outside tunnel' : 'Disabled — all traffic tunneled',
     };
-    subEl.textContent = copy[key];
+    if (subEl) subEl.textContent = copy[key];
+    addLog(`${key} turned ${isOn ? 'on' : 'off'}`, 'info');
   });
 });
 
@@ -386,3 +582,6 @@ requestAnimationFrame(() => {
   moveLatticeAnchor(c.x, c.y);
 });
 drawSparkline();
+drawNoiseChart();
+updateLatticeMonitor();
+addLog('PQ Tunneling initialized', 'ok');
