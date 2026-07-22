@@ -6,9 +6,22 @@
 let ipcRenderer = null;
 try { ipcRenderer = require('electron').ipcRenderer; } catch (e) { /* running in plain browser preview */ }
 
-document.getElementById('wcMin').addEventListener('click', () => ipcRenderer && ipcRenderer.send('window-minimize'));
-document.getElementById('wcMax').addEventListener('click', () => ipcRenderer && ipcRenderer.send('window-maximize'));
-document.getElementById('wcClose').addEventListener('click', () => ipcRenderer && ipcRenderer.send('window-close'));
+// Titlebar Window Controls
+document.getElementById('wcMin')?.addEventListener('click', () => {
+  window.electronAPI?.sendMinimize();
+});
+
+document.getElementById('wcMax')?.addEventListener('click', () => {
+  window.electronAPI?.sendMaximize();
+});
+
+document.getElementById('wcClose')?.addEventListener('click', () => {
+  window.electronAPI?.sendClose();
+});
+
+//document.getElementById('wcMin').addEventListener('click', () => ipcRenderer && ipcRenderer.send('window-minimize'));
+//document.getElementById('wcMax').addEventListener('click', () => ipcRenderer && ipcRenderer.send('window-maximize'));
+//document.getElementById('wcClose').addEventListener('click', () => ipcRenderer && ipcRenderer.send('window-close'));
 
 // =====================================================================
 // DATA
