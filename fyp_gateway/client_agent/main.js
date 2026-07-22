@@ -1,10 +1,43 @@
 // fyp_gateway/client_agent/main.js
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
-const { exec } = require('child_process');
+const { spawn } = require('child_process');
 
-let mainWindow;
+let mainWindow = null;
 let pyBackendProcess = null;
+
+function startLocalBackend() {
+  const scriptPath = path.join(__dirname, 'backend_core', 'local_api.py');
+  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+
+  console.log(`[*] Spawning Core Python Subprocess: ${pythonCmd} "${scriptPath}"`);
+
+  pyBackendProcess = spawn(pythonCmd, ['-u', scriptPath], {
+    env: { ...process.env, PYTHONUNBUFFERED: '1' }
+  });
+
+  pyBackendProcess.stdout.on('data', (data) => {
+    const lines = data.toString().trim().split('\n');
+    lines.forEach((line) => {
+      if (line) console.log(`[Python Core STDOUT]: ${line}`);
+    });
+  });
+
+  pyBackendProcess.stderr.on('data', (data) => {
+    const lines = data.toString().trim().split('\n');
+    lines.forEach((line) => {
+      if (line) console.error(`[Python Core STDERR]: ${line}`);
+    });
+  });
+
+  pyBackendProcess.on('close', (code) => {
+    console.log(`[Python Core] Subprocess exited with status code: ${code}`);
+  });
+
+  pyBackendProcess.on('error', (err) => {
+    console.error(`[-] Failed to start Python process: ${err.message}`);
+  });
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -12,7 +45,7 @@ function createWindow() {
     height: 700,
     minWidth: 1000,
     minHeight: 600,
-    frame: false, // Custom framing capability mapped to your CSS layout
+    frame: false,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -20,43 +53,40 @@ function createWindow() {
     }
   });
 
-  mainWindow.loadFile('index.html');
-}
-
-function startLocalBackend() {
-  const isWindows = process.platform === "win32";
-  let scriptPath = path.join(__dirname, 'backend_core', 'local_api.py');
-  let command = isWindows ? `python "${scriptPath}"` : `python3 "${scriptPath}"`;
-
-  console.log(`[*] Spawning Core Python Subprocess: ${command}`);
-  
-  pyBackendProcess = exec(command, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`[-] Python Kernel Initialization Error: ${error.message}`);
-      return;
-    }
+  mainWindow.loadFile(path.join(__dirname, 'index.html')).catch((err) => {
+    console.error("[-] Failed to load index.html:", err);
   });
 
-  pyBackendProcess.stdout.on('data', (data) => console.log(`[Python Core STDOUT]: ${data}`));
-  pyBackendProcess.stderr.on('data', (data) => console.error(`[Python Core STDERR]: ${data}`));
+  // Uncomment if you want DevTools auto-opened for frontend debugging
+  // mainWindow.webContents.openDevTools();
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
 }
 
-// Custom Titlebar Frame Signal Mappings
-ipcMain.on('window-minimize', () => mainWindow && mainWindow.minimize());
+// Window Titlebar Control IPCs
+ipcMain.on('window-minimize', () => {
+  if (mainWindow) mainWindow.minimize();
+});
+
 ipcMain.on('window-maximize', () => {
-  if (mainWindow.isMaximized()) {
-    mainWindow.unmaximize();
-  } else {
-    mainWindow.maximize();
+  if (mainWindow) {
+    mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
   }
 });
+
 ipcMain.on('window-close', () => {
-  if (pyBackendProcess) pyBackendProcess.kill();
+  if (pyBackendProcess) {
+    console.log('[Electron Main] Terminating Python process...');
+    pyBackendProcess.kill();
+  }
   app.quit();
 });
 
+// App Lifecycle
 app.whenReady().then(() => {
-  startLocalBackend(); 
+  startLocalBackend();
   createWindow();
 
   app.on('activate', () => {
@@ -65,8 +95,10 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    if (pyBackendProcess) pyBackendProcess.kill();
-    app.quit();
-  }
+  if (pyBackendProcess) pyBackendProcess.kill();
+  if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('will-quit', () => {
+  if (pyBackendProcess) pyBackendProcess.kill();
 });
